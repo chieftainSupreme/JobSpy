@@ -32,6 +32,19 @@ HIGH_YIELD = [
     "LLM engineer",
     "business intelligence",
     "quantitative analyst",
+    "data analyst",
+    "analytics engineer",
+    "data intern",
+    "product analyst",
+    "growth analyst",
+    "data governance",
+    "ml platform",
+    "staff data engineer",
+    "principal data scientist",
+    "NLP engineer",
+    "computer vision",
+    "generative AI",
+    "AI researcher",
 ]
 
 LOCATIONS = [
