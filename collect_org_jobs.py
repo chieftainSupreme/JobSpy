@@ -402,12 +402,13 @@ def main() -> int:
             matched_total += matched
             prefix = f"[{completed}/{len(orgs)}] {name}"
             if error:
-                print(f"{prefix}: ERROR {error}", flush=True)
+                line = f"{prefix}: ERROR {error}"
             else:
-                print(
-                    f"{prefix}: found {found}, matched {matched}",
-                    flush=True,
-                )
+                line = f"{prefix}: found {found}, matched {matched}"
+            try:
+                print(line, flush=True)
+            except UnicodeEncodeError:
+                print(line.encode("ascii", "replace").decode("ascii"), flush=True)
 
     totals = con.execute(
         """

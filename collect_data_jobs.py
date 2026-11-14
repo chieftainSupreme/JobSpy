@@ -56,12 +56,48 @@ SEARCH_TERMS = [
     "analytics consultant",
     "bigquery",
     "redshift engineer",
+    "research scientist",
+    "AI engineer",
+    "ML engineer",
+    "LLM engineer",
+    "prompt engineer",
+    "AI researcher",
+    "NLP engineer",
+    "computer vision",
+    "generative AI",
+    "staff data engineer",
+    "principal data scientist",
+    "data product manager",
+    "product analyst",
+    "growth analyst",
+    "marketing analyst",
+    "reporting analyst",
+    "statistician",
+    "spark engineer",
+    "kafka engineer",
+    "data governance",
+    "data quality",
+    "data visualization",
+    "ml platform",
+    "feature store",
+    "lakehouse",
+    "analytics lead",
+    "head of analytics",
+    "director of data",
+    "data intern",
 ]
 
 COUNTRIES = [
     {"label": "USA", "country_indeed": "USA"},
     {"label": "Canada", "country_indeed": "Canada"},
     {"label": "UK", "country_indeed": "UK"},
+    {"label": "Australia", "country_indeed": "Australia"},
+    {"label": "Ireland", "country_indeed": "Ireland"},
+    {"label": "Germany", "country_indeed": "Germany"},
+    {"label": "Netherlands", "country_indeed": "Netherlands"},
+    {"label": "India", "country_indeed": "India"},
+    {"label": "Singapore", "country_indeed": "Singapore"},
+    {"label": "France", "country_indeed": "France"},
 ]
 
 DATA_JOB_PATTERN = (
@@ -70,6 +106,10 @@ DATA_JOB_PATTERN = (
     "bi engineer|bi developer|business intelligence|"
     "data platform|data architect|data model|data ops|"
     "etl |dbt|airflow|snowflake|bigquery|redshift|"
+    "research scientist|ai engineer|llm engineer|prompt engineer|"
+    "nlp engineer|computer vision|generative ai|product analyst|"
+    "growth analyst|data governance|data quality|lakehouse|"
+    "feature store|ml platform|spark engineer|kafka engineer|"
     "databricks|looker|tableau|power bi|warehouse engineer|"
     "decision scientist|quantitative analyst|insights analyst|"
     "head of data|director of analytics|analytics"
@@ -233,6 +273,21 @@ def setup(con: duckdb.DuckDBPyConnection) -> None:
         ):
             con.execute("DROP TABLE jobspy.jobs")
     con.execute(JOBS_DDL)
+    for column in (
+        "listing_type",
+        "job_level",
+        "job_function",
+        "skills",
+        "experience_range",
+        "work_from_home_type",
+        "emails",
+    ):
+        try:
+            con.execute(
+                f"ALTER TABLE jobspy.jobs ALTER COLUMN {column} SET DATA TYPE VARCHAR"
+            )
+        except Exception:
+            pass
 
 
 def refresh_view(con: duckdb.DuckDBPyConnection) -> None:

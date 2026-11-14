@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from pydantic import (
@@ -22,6 +22,22 @@ def _named(prefix: str, names: tuple[str, ...]) -> BeforeValidator:
     """The second page layout's number for an enum, as the first layout's name."""
     numbered = {number: prefix + name for number, name in enumerate(names)}
     return BeforeValidator(lambda value: numbered.get(value, value))
+
+
+def _parse_posted(value: object) -> object:
+    if isinstance(value, datetime) or value is None:
+        return value
+    if isinstance(value, dict):
+        value = value.get("seconds", value)
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("$n"):
+            text = text[2:]
+        if text.isdigit():
+            return datetime.fromtimestamp(int(text), tz=timezone.utc)
+    return value
 
 
 class EmploymentType(BaseModel):
@@ -49,7 +65,7 @@ class Pay(BaseModel):
 class Job(BaseModel):
     listingKey: str | None
     title: str
-    postedAtUtc: datetime = Field(
+    postedAtUtc: Annotated[datetime, BeforeValidator(_parse_posted)] = Field(
         validation_alias=AliasChoices(
             AliasPath("status", "postedAtUtc", "seconds"),
             AliasPath("status", "postedAtUtc"),
