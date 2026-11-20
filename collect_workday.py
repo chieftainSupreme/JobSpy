@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from collect_ats_boards import setup, strip_html
-from collect_data_jobs import connect
+from collect_data_jobs import connect, upsert_by_id
 from collect_frontier_labs import org_ids
 
 PAGE_SIZE = 20
@@ -136,49 +136,11 @@ def normalize_workday(board: dict, job: dict) -> dict:
 
 
 def copy_existing(con) -> int:
-    con.execute(
-        """
-        INSERT INTO jobspy.ats_jobs BY NAME
-        SELECT
-            'workday-' || p.slug || '-' || p.job_id AS id,
-            'workday' AS site,
-            coalesce(b.company, json_extract_string(p.raw_json, '$.hiringOrganization.name'), p.slug) AS company,
-            coalesce(b.domain, '') AS domain,
-            NULL::INTEGER AS organization_id,
-            p.slug AS board_slug,
-            coalesce(
-                json_extract_string(p.raw_json, '$.jobPostingInfo.title'),
-                json_extract_string(p.raw_json, '$.title')
-            ) AS title,
-            coalesce(
-                json_extract_string(p.raw_json, '$.jobPostingInfo.location'),
-                json_extract_string(p.raw_json, '$.jobPostingInfo.country.descriptor')
-            ) AS location,
-            json_extract_string(p.raw_json, '$.jobPostingInfo.jobFamily') AS department,
-            json_extract_string(p.raw_json, '$.jobPostingInfo.externalUrl') AS job_url,
-            json_extract_string(p.raw_json, '$.jobPostingInfo.jobDescription') AS description,
-            lower(coalesce(
-                json_extract_string(p.raw_json, '$.jobPostingInfo.location'),
-                ''
-            )) LIKE '%remote%' AS is_remote,
-            NULL::DOUBLE AS min_amount,
-            NULL::DOUBLE AS max_amount,
-            NULL::VARCHAR AS currency,
-            json_extract_string(p.raw_json, '$.jobPostingInfo.startDate') AS published_at,
-            coalesce(p.last_seen_at, p.loaded_at, current_timestamp) AS scraped_at
-        FROM ats_raw.workday_postings p
-        LEFT JOIN ats_raw.boards b
-          ON b.ats = 'workday' AND b.slug = p.slug
-        WHERE coalesce(p.is_open, true)
-          AND NOT EXISTS (
-              SELECT 1 FROM jobspy.ats_jobs j
-              WHERE j.id = 'workday-' || p.slug || '-' || p.job_id
-          )
-        """
+    """Copying ats_raw.workday_postings into jobspy.ats_jobs is stopped."""
+    del con
+    raise RuntimeError(
+        "Copying ats_raw.workday_postings into jobspy.ats_jobs is stopped"
     )
-    return con.execute(
-        "SELECT COUNT(*) FROM jobspy.ats_jobs WHERE site = 'workday'"
-    ).fetchone()[0]
 
 
 def load_boards(con) -> list[dict]:
@@ -199,23 +161,18 @@ def upsert_frame(con, frame: pd.DataFrame, write_lock) -> int:
     if frame.empty:
         return 0
     with write_lock:
-        con.register("batch", frame)
-        con.execute("DELETE FROM jobspy.ats_jobs WHERE id IN (SELECT id FROM batch)")
-        con.execute("INSERT INTO jobspy.ats_jobs BY NAME SELECT * FROM batch")
-    return len(frame)
+        return upsert_by_id(con, "ats_jobs", frame)
 
 
 def main() -> int:
+    safe_print(
+        "Stopped: JobSpy no longer collects Workday boards or copies "
+        "ats_raw.workday_postings into jobspy.ats_jobs."
+    )
+    return 0
     con = connect("lighthouse")
     setup(con)
     ids = org_ids(con)
-    safe_print("Copying existing Workday postings into jobspy.ats_jobs...")
-    try:
-        copied = copy_existing(con)
-        safe_print(f"Workday rows now in jobspy.ats_jobs: {copied}")
-    except Exception as exc:  # noqa: BLE001
-        safe_print(f"Copy existing failed (live fetch will still run): {exc}")
-
     done = {
         row[0]
         for row in con.execute(

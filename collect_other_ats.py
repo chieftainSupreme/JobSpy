@@ -11,7 +11,7 @@ import json
 import pandas as pd
 
 from collect_ats_boards import setup, strip_html
-from collect_data_jobs import connect
+from collect_data_jobs import connect, upsert_by_id
 from collect_frontier_labs import org_ids
 
 
@@ -108,6 +108,11 @@ def pull_board(board: dict) -> pd.DataFrame:
 
 
 def main() -> int:
+    safe_print(
+        "Stopped: JobSpy no longer collects Workable or Recruitee boards. "
+        "ats_raw already covers them."
+    )
+    return 0
     con = connect("lighthouse")
     setup(con)
     ids = org_ids(con)
@@ -150,13 +155,7 @@ def main() -> int:
                 domain = (board.get("domain") or "").lower()
                 frame["organization_id"] = ids.get(domain)
                 with write_lock:
-                    con.register("batch", frame)
-                    con.execute(
-                        "DELETE FROM jobspy.ats_jobs WHERE id IN (SELECT id FROM batch)"
-                    )
-                    con.execute(
-                        "INSERT INTO jobspy.ats_jobs BY NAME SELECT * FROM batch"
-                    )
+                    upsert_by_id(con, "ats_jobs", frame)
             found = 0 if frame.empty else len(frame)
             with write_lock:
                 con.execute(

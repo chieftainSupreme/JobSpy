@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 import duckdb
 import pandas as pd
 
-from collect_data_jobs import connect
+from collect_data_jobs import connect, ensure_contract_columns, upsert_by_id
 
 LABS = [
     {"company": "Anthropic", "domain": "anthropic.com", "ats": "greenhouse", "slug": "anthropic"},
@@ -143,10 +143,14 @@ def setup(con: duckdb.DuckDBPyConnection) -> None:
             max_amount DOUBLE,
             currency VARCHAR,
             published_at VARCHAR,
-            scraped_at TIMESTAMP WITH TIME ZONE
+            scraped_at TIMESTAMP WITH TIME ZONE,
+            run_id VARCHAR,
+            first_seen_at TIMESTAMP WITH TIME ZONE,
+            last_seen_at TIMESTAMP WITH TIME ZONE
         )
         """
     )
+    ensure_contract_columns(con, "frontier_jobs", backfill=True)
 
 
 def org_ids(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
@@ -161,11 +165,7 @@ def org_ids(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
 
 
 def upsert(con: duckdb.DuckDBPyConnection, batch: pd.DataFrame) -> None:
-    if batch.empty:
-        return
-    con.register("batch", batch)
-    con.execute("DELETE FROM jobspy.frontier_jobs WHERE id IN (SELECT id FROM batch)")
-    con.execute("INSERT INTO jobspy.frontier_jobs BY NAME SELECT * FROM batch")
+    upsert_by_id(con, "frontier_jobs", batch)
 
 
 def pull_lab(lab: dict) -> pd.DataFrame:

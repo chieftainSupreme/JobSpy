@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from collect_data_jobs import connect
+from collect_data_jobs import connect, ensure_contract_columns, upsert_by_id
 from collect_frontier_labs import (
     ashby_jobs,
     fetch_json as frontier_fetch_json,
@@ -96,10 +96,14 @@ def setup(con) -> None:
             max_amount DOUBLE,
             currency VARCHAR,
             published_at VARCHAR,
-            scraped_at TIMESTAMP WITH TIME ZONE
+            scraped_at TIMESTAMP WITH TIME ZONE,
+            run_id VARCHAR,
+            first_seen_at TIMESTAMP WITH TIME ZONE,
+            last_seen_at TIMESTAMP WITH TIME ZONE
         )
         """
     )
+    ensure_contract_columns(con, "ats_jobs", backfill=True)
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS jobspy.ats_board_runs (
@@ -156,6 +160,11 @@ def safe_print(line: str) -> None:
 
 
 def main() -> int:
+    safe_print(
+        "Stopped: JobSpy no longer collects Greenhouse, Ashby, or Lever boards. "
+        "ats_raw already covers them."
+    )
+    return 0
     con = connect("lighthouse")
     setup(con)
     ids = org_ids(con)
@@ -188,13 +197,7 @@ def main() -> int:
                 domain = (board.get("domain") or "").lower()
                 frame["organization_id"] = ids.get(domain)
                 with write_lock:
-                    con.register("batch", frame)
-                    con.execute(
-                        "DELETE FROM jobspy.ats_jobs WHERE id IN (SELECT id FROM batch)"
-                    )
-                    con.execute(
-                        "INSERT INTO jobspy.ats_jobs BY NAME SELECT * FROM batch"
-                    )
+                    upsert_by_id(con, "ats_jobs", frame)
             found = 0 if frame is None or frame.empty else len(frame)
             with write_lock:
                 con.execute(

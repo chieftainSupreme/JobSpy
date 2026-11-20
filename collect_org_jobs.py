@@ -1,8 +1,8 @@
-"""Scrape Indeed jobs for every account in sumble_raw.organizations.
+"""Scrape Indeed jobs for companies in collector_targets.indeed_org_targets.
 
-Each organization is searched by company name on the Indeed site that
-matches its HQ country. Results are kept only when the employer name or
-website matches the organization, then upserted into jobspy.org_jobs.
+Due companies (never searched, or last search older than 7 days) run first.
+Results are kept only when the employer name or website matches the
+organization, then upserted into jobspy.org_jobs.
 """
 
 from __future__ import annotations
@@ -19,7 +19,13 @@ from urllib.parse import urlparse
 import duckdb
 import pandas as pd
 
-from collect_data_jobs import ALL_COLUMNS, connect, normalize
+from collect_data_jobs import (
+    ALL_COLUMNS,
+    connect,
+    ensure_contract_columns,
+    normalize,
+    upsert_by_id,
+)
 from jobspy import scrape_jobs
 from jobspy.model import Country
 
@@ -65,6 +71,37 @@ def indeed_country(raw: str | None) -> str:
 # Names this short are too common for "contains" matching (Ramp, Air, Kit).
 WORD_MATCH_MIN = 6
 
+# Compact equality is for punctuation and spacing ("H-E-B" / "HEB").
+# Names shorter than this stay on the exact and prefix checks only.
+COMPACT_NAME_MIN = 5
+
+COMPACT_SUFFIXES = frozenset(
+    {
+        "the",
+        "company",
+        "companies",
+        "inc",
+        "incorporated",
+        "llc",
+        "ltd",
+        "limited",
+        "corp",
+        "corporation",
+        "co",
+        "plc",
+        "gmbh",
+        "ag",
+        "sa",
+        "pty",
+    }
+)
+
+
+def compact_name(name: str) -> str:
+    text = name.lower().replace(".", "")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return "".join(token for token in text.split() if token not in COMPACT_SUFFIXES)
+
 # Extra employer names that should count as the org even when they don't
 # share a prefix. Add more rows to jobspy.org_aliases anytime.
 ALIAS_SEEDS = {
@@ -108,24 +145,36 @@ def job_matches_org(
             return True
         if contains_word(company, needle):
             return True
+    if len(org) >= COMPACT_NAME_MIN:
+        employer_key = compact_name(company)
+        org_key = compact_name(name)
+        if employer_key and employer_key == org_key:
+            return True
     return False
 
 
-def load_orgs(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+def load_orgs(
+    con: duckdb.DuckDBPyConnection, *, due_only: bool = False
+) -> pd.DataFrame:
+    where = "WHERE t.is_due" if due_only else ""
     return con.execute(
-        """
+        f"""
         SELECT
-            o.organization_id,
-            o.name,
-            o.url AS domain,
-            f.country
-        FROM sumble_raw.organizations o
-        LEFT JOIN organization_firmographics f
-          ON o.organization_id = f.organization_id
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY o.organization_id
-            ORDER BY o.pulled_at DESC NULLS LAST
-        ) = 1
+            t.organization_id,
+            t.organization_name AS name,
+            t.domain,
+            coalesce(r.country, 'USA') AS country,
+            t.is_due,
+            t.last_searched_at
+        FROM collector_targets.indeed_org_targets t
+        LEFT JOIN (
+            SELECT organization_id,
+                   arg_max(country, coalesce(finished_at, started_at)) AS country
+            FROM jobspy.org_search_runs
+            GROUP BY organization_id
+        ) r USING (organization_id)
+        {where}
+        ORDER BY t.last_searched_at NULLS FIRST, t.organization_id
         """
     ).df()
 
@@ -147,8 +196,8 @@ def setup(con: duckdb.DuckDBPyConnection) -> None:
                 """
                 INSERT OR IGNORE INTO jobspy.org_aliases (organization_id, alias)
                 SELECT organization_id, ?
-                FROM sumble_raw.organizations
-                WHERE lower(name) = ?
+                FROM collector_targets.indeed_org_targets
+                WHERE lower(organization_name) = ?
                 """,
                 [alias, org_name],
             )
@@ -208,10 +257,14 @@ def setup(con: duckdb.DuckDBPyConnection) -> None:
             scraped_at TIMESTAMP WITH TIME ZONE,
             organization_id INTEGER,
             organization_name VARCHAR,
-            organization_domain VARCHAR
+            organization_domain VARCHAR,
+            run_id VARCHAR,
+            first_seen_at TIMESTAMP WITH TIME ZONE,
+            last_seen_at TIMESTAMP WITH TIME ZONE
         )
         """
     )
+    ensure_contract_columns(con, "org_jobs", backfill=True)
 
 
 def already_done(con: duckdb.DuckDBPyConnection, org_id: int) -> bool:
@@ -234,18 +287,7 @@ def upsert_org_jobs(con: duckdb.DuckDBPyConnection, batch: pd.DataFrame) -> int:
     if batch.empty:
         return 0
     with write_lock:
-        con.register("batch", batch)
-        con.execute(
-            """
-            DELETE FROM jobspy.org_jobs
-            WHERE id IN (SELECT id FROM batch WHERE id IS NOT NULL)
-               OR (organization_id, id) IN (
-                    SELECT organization_id, id FROM batch
-               )
-            """
-        )
-        con.execute("INSERT INTO jobspy.org_jobs BY NAME SELECT * FROM batch")
-    return len(batch)
+        return upsert_by_id(con, "org_jobs", batch)
 
 
 def record_start(con: duckdb.DuckDBPyConnection, org_id: int, name: str, country: str) -> None:
@@ -364,18 +406,7 @@ def main() -> int:
     args = parse_args()
     con = connect(args.database)
     setup(con)
-    orgs = load_orgs(con)
-    if not args.force:
-        done = {
-            row[0]
-            for row in con.execute(
-                """
-                SELECT organization_id FROM jobspy.org_search_runs
-                WHERE finished_at IS NOT NULL AND error IS NULL
-                """
-            ).fetchall()
-        }
-        orgs = orgs[~orgs["organization_id"].isin(done)]
+    orgs = load_orgs(con, due_only=not args.force)
     if args.limit:
         orgs = orgs.head(args.limit)
     if orgs.empty:
